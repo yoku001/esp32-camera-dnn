@@ -15,8 +15,11 @@
 #include "esp_event_loop.h"
 #include "esp_http_server.h"
 
-#include "dnn/Validation_inference.h"
-#include "dnn/Validation_parameters.h"
+#include "Validation_inference.h"
+#include "Validation_parameters.h"
+
+#define STB_IMAGE_RESIZE_IMPLEMENTATION
+#include "stb_image_resize.h"
 
 static const char* TAG = "camera";
 
@@ -89,6 +92,8 @@ static camera_config_t camera_config = {
 static void wifi_init_softap();
 static esp_err_t http_server_init();
 
+void *_context = NULL;
+
 void app_main()
 {
     esp_log_level_set("wifi", ESP_LOG_INFO);
@@ -106,37 +111,54 @@ void app_main()
     
     wifi_init_softap();
 
+    _context = nnablart_validation_allocate_context(Validation_parameters);
+
     vTaskDelay(100 / portTICK_PERIOD_MS);
     http_server_init();
 }
 
 #ifdef CAM_USE_WIFI
 
+#define INPUT_WIDTH 28
+#define INPUT_HEIGHT 28
+
+uint8_t resized_img[INPUT_WIDTH * INPUT_HEIGHT];
+
 esp_err_t jpg_httpd_handler(httpd_req_t *req){
-    camera_fb_t * fb = NULL;
     esp_err_t res = ESP_OK;
-    size_t fb_len = 0;
     int64_t fr_start = esp_timer_get_time();
 
-    fb = esp_camera_fb_get();
+    camera_fb_t *fb = esp_camera_fb_get();
     if (!fb) {
         ESP_LOGE(TAG, "Camera capture failed");
         httpd_resp_send_500(req);
         return ESP_FAIL;
     }
+
+    stbir_resize_uint8(fb->buf, 176, 144, 0,
+                       resized_img, INPUT_WIDTH, INPUT_HEIGHT, 0, 1);
+
+    float *nn_input_buffer = nnablart_validation_input_buffer(_context, 0);
+    for (int i = 0; i < INPUT_WIDTH * INPUT_HEIGHT; i++) {
+        nn_input_buffer[i] = resized_img[i] / 255.0f;
+    }
+
+    // Exec inference
+    nnablart_validation_inference(_context);
+
     res = httpd_resp_set_type(req, "application/octet-stream");
     if(res == ESP_OK){
         res = httpd_resp_set_hdr(req, "Content-Disposition", "inline; filename=capture.bin");
     }
 
     if(res == ESP_OK){
-        fb_len = fb->len;
-        res = httpd_resp_send(req, (const char *)fb->buf, fb->len);
+        // res = httpd_resp_send(req, (const char *)fb->buf, fb->len);
+        res = httpd_resp_send(req, (const char *)nn_input_buffer, sizeof(float) * INPUT_WIDTH * INPUT_HEIGHT);
     }
     esp_camera_fb_return(fb);
     int64_t fr_end = esp_timer_get_time();
-    
-    ESP_LOGI(TAG, "JPG: %uKB %ums", (uint32_t)(fb_len/1024), (uint32_t)((fr_end - fr_start)/1000));
+
+    ESP_LOGI(TAG, "JPG: %ums  Core ID: %u", (uint32_t)((fr_end - fr_start)/1000), xPortGetCoreID());
     return res;
 }
 
