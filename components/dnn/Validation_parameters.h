@@ -23,7 +23,7 @@
 extern "C" {
 #endif /* __cplusplus */
 
-extern void* Validation_parameters[8];
+extern void* Validation_parameters[10];
 
 #ifdef __cplusplus
 }

@@ -35,27 +35,29 @@ int nnablart_validation_free_context(void* context);
 /// Number of input buffers.
 #define NNABLART_VALIDATION_NUM_OF_INPUT_BUFFERS (1)
 /// Input buffer sizes.
-#define NNABLART_VALIDATION_INPUT0_SIZE (100352)
+#define NNABLART_VALIDATION_INPUT0_SIZE (784)
 /// Pointer of allocated buffer.
 float* nnablart_validation_input_buffer(void* context, int index);
 
 /// Number of output buffers.
 #define NNABLART_VALIDATION_NUM_OF_OUTPUT_BUFFERS (1)
 /// Output buffer sizes.
-#define NNABLART_VALIDATION_OUTPUT0_SIZE (1280)
+#define NNABLART_VALIDATION_OUTPUT0_SIZE (10)
 /// Pointer of allocated buffer.
 float* nnablart_validation_output_buffer(void* context, int index);
 /// Number of parameter buffers.
-#define NNABLART_VALIDATION_NUM_OF_PARAM_BUFFERS (8)
+#define NNABLART_VALIDATION_NUM_OF_PARAM_BUFFERS (10)
 /// Parameter buffer sizes.
-#define NNABLART_VALIDATION_PARAM0_SIZE (400)
-#define NNABLART_VALIDATION_PARAM1_SIZE (16)
-#define NNABLART_VALIDATION_PARAM2_SIZE (6400)
-#define NNABLART_VALIDATION_PARAM3_SIZE (16)
-#define NNABLART_VALIDATION_PARAM4_SIZE (12800)
-#define NNABLART_VALIDATION_PARAM5_SIZE (50)
-#define NNABLART_VALIDATION_PARAM6_SIZE (500)
-#define NNABLART_VALIDATION_PARAM7_SIZE (10)
+#define NNABLART_VALIDATION_PARAM0_SIZE (72)
+#define NNABLART_VALIDATION_PARAM1_SIZE (8)
+#define NNABLART_VALIDATION_PARAM2_SIZE (72)
+#define NNABLART_VALIDATION_PARAM3_SIZE (8)
+#define NNABLART_VALIDATION_PARAM4_SIZE (64)
+#define NNABLART_VALIDATION_PARAM5_SIZE (8)
+#define NNABLART_VALIDATION_PARAM6_SIZE (8000)
+#define NNABLART_VALIDATION_PARAM7_SIZE (40)
+#define NNABLART_VALIDATION_PARAM8_SIZE (400)
+#define NNABLART_VALIDATION_PARAM9_SIZE (10)
 /// Pointer of allocated buffer.
 float* nnablart_validation_param_buffer(void* context, int index);
 
