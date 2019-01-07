@@ -83,7 +83,7 @@ static camera_config_t camera_config = {
     .ledc_channel = LEDC_CHANNEL_0,
 
     .pixel_format = PIXFORMAT_GRAYSCALE, //YUV422,GRAYSCALE,RGB565,JPEG
-    .frame_size = FRAMESIZE_QCIF, //QQVGA-UXGA Do not use sizes above QVGA when not JPEG
+    .frame_size = FRAMESIZE_QQVGA, //QQVGA-UXGA Do not use sizes above QVGA when not JPEG
 
     .jpeg_quality = 2, //0-63 lower number means higher quality
     .fb_count = 3 //if more than one, i2s runs in continuous mode. Use only with JPEG
@@ -122,7 +122,7 @@ void app_main()
 #define INPUT_WIDTH 28
 #define INPUT_HEIGHT 28
 
-uint8_t resized_img[INPUT_WIDTH * INPUT_HEIGHT];
+uint8_t resized_img[NNABLART_VALIDATION_INPUT0_SIZE];
 
 esp_err_t jpg_httpd_handler(httpd_req_t *req){
     esp_err_t res = ESP_OK;
@@ -135,16 +135,7 @@ esp_err_t jpg_httpd_handler(httpd_req_t *req){
         return ESP_FAIL;
     }
 
-    stbir_resize_uint8(fb->buf, 176, 144, 0,
-                       resized_img, INPUT_WIDTH, INPUT_HEIGHT, 0, 1);
-
-    float *nn_input_buffer = nnablart_validation_input_buffer(_context, 0);
-    for (int i = 0; i < INPUT_WIDTH * INPUT_HEIGHT; i++) {
-        nn_input_buffer[i] = resized_img[i] / 255.0f;
-    }
-
-    // Exec inference
-    nnablart_validation_inference(_context);
+    // infer_dnn(fb);
 
     res = httpd_resp_set_type(req, "application/octet-stream");
     if(res == ESP_OK){
@@ -152,8 +143,7 @@ esp_err_t jpg_httpd_handler(httpd_req_t *req){
     }
 
     if(res == ESP_OK){
-        // res = httpd_resp_send(req, (const char *)fb->buf, fb->len);
-        res = httpd_resp_send(req, (const char *)nn_input_buffer, sizeof(float) * INPUT_WIDTH * INPUT_HEIGHT);
+        res = httpd_resp_send(req, (const char *)fb->buf, fb->len);
     }
     esp_camera_fb_return(fb);
     int64_t fr_end = esp_timer_get_time();
@@ -163,23 +153,23 @@ esp_err_t jpg_httpd_handler(httpd_req_t *req){
 }
 
 esp_err_t jpg_stream_httpd_handler(httpd_req_t *req){
-    camera_fb_t * fb = NULL;
-    esp_err_t res = ESP_OK;
     size_t _jpg_buf_len;
     uint8_t * _jpg_buf;
     char * part_buf[64];
+    char log_buf[255];
+
     static int64_t last_frame = 0;
     if(!last_frame) {
         last_frame = esp_timer_get_time();
     }
 
-    res = httpd_resp_set_type(req, _STREAM_CONTENT_TYPE);
+    esp_err_t res = httpd_resp_set_type(req, _STREAM_CONTENT_TYPE);
     if(res != ESP_OK){
         return res;
     }
 
     while(true){
-        fb = esp_camera_fb_get();
+        camera_fb_t *fb = esp_camera_fb_get();
         if (!fb) {
             ESP_LOGE(TAG, "Camera capture failed");
             res = ESP_FAIL;
@@ -210,17 +200,35 @@ esp_err_t jpg_stream_httpd_handler(httpd_req_t *req){
         if(fb->format != PIXFORMAT_JPEG){
             free(_jpg_buf);
         }
+
+        // Preprocessing
+        stbir_resize_uint8(fb->buf, 160, 120, 0, resized_img, INPUT_WIDTH, INPUT_HEIGHT, 0, 1);
         esp_camera_fb_return(fb);
-        if(res != ESP_OK){
-            break;
+
+        float *nn_input_buffer = nnablart_validation_input_buffer(_context, 0);
+        for (int i = 0; i < NNABLART_VALIDATION_INPUT0_SIZE; i++) {
+            nn_input_buffer[i] = abs(resized_img[i] - 255) / 255.0f;
         }
+
+        // Exec inference
+        nnablart_validation_inference(_context);
+        infer_time = (esp_timer_get_time() - infer_time) / 1000;
+
+        float *pred = nnablart_validation_output_buffer(_context, 0);
+        log_buf[0] = '\0';
+        for (int class = 0; class < NNABLART_VALIDATION_OUTPUT0_SIZE; class++) {
+            char str_class[20];
+            sprintf(str_class, "%d: %6.3f  ", class, pred[class]);
+            strcat(log_buf, str_class);
+        }
+
+        ESP_LOGI(TAG, "%s", log_buf);
+
         int64_t fr_end = esp_timer_get_time();
         int64_t frame_time = fr_end - last_frame;
         last_frame = fr_end;
         frame_time /= 1000;
-        ESP_LOGI(TAG, "MJPG: %uKB %ums (%.1ffps)",
-            (uint32_t)(_jpg_buf_len/1024),
-            (uint32_t)frame_time, 1000.0 / (uint32_t)frame_time);
+        ESP_LOGI(TAG, "Frame-time %ums (%.1ffps)  Inferrence-time  %ums", (uint32_t)frame_time, 1000.0 / (uint32_t)frame_time, (uint32_t)infer_time);
     }
 
     last_frame = 0;
