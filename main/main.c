@@ -86,7 +86,7 @@ static camera_config_t camera_config = {
     .frame_size = FRAMESIZE_QQVGA, //QQVGA-UXGA Do not use sizes above QVGA when not JPEG
 
     .jpeg_quality = 2, //0-63 lower number means higher quality
-    .fb_count = 3 //if more than one, i2s runs in continuous mode. Use only with JPEG
+    .fb_count = 1 //if more than one, i2s runs in continuous mode. Use only with JPEG
 };
 
 static void wifi_init_softap();
@@ -119,36 +119,30 @@ void app_main()
 
 #ifdef CAM_USE_WIFI
 
-#define INPUT_WIDTH 28
-#define INPUT_HEIGHT 28
-
-uint8_t resized_img[NNABLART_VALIDATION_INPUT0_SIZE];
-
 esp_err_t jpg_httpd_handler(httpd_req_t *req){
+    camera_fb_t * fb = NULL;
     esp_err_t res = ESP_OK;
+    size_t fb_len = 0;
     int64_t fr_start = esp_timer_get_time();
 
-    camera_fb_t *fb = esp_camera_fb_get();
+    fb = esp_camera_fb_get();
     if (!fb) {
         ESP_LOGE(TAG, "Camera capture failed");
         httpd_resp_send_500(req);
         return ESP_FAIL;
     }
-
-    // infer_dnn(fb);
-
-    res = httpd_resp_set_type(req, "application/octet-stream");
+    res = httpd_resp_set_type(req, "image/jpeg");
     if(res == ESP_OK){
-        res = httpd_resp_set_hdr(req, "Content-Disposition", "inline; filename=capture.bin");
+        res = httpd_resp_set_hdr(req, "Content-Disposition", "inline; filename=capture.jpg");
     }
 
     if(res == ESP_OK){
+        fb_len = fb->len;
         res = httpd_resp_send(req, (const char *)fb->buf, fb->len);
     }
     esp_camera_fb_return(fb);
     int64_t fr_end = esp_timer_get_time();
-
-    ESP_LOGI(TAG, "JPG: %ums  Core ID: %u", (uint32_t)((fr_end - fr_start)/1000), xPortGetCoreID());
+    ESP_LOGI(TAG, "JPG: %uKB %ums", (uint32_t)(fb_len/1024), (uint32_t)((fr_end - fr_start)/1000));
     return res;
 }
 
@@ -156,7 +150,7 @@ esp_err_t jpg_stream_httpd_handler(httpd_req_t *req){
     size_t _jpg_buf_len;
     uint8_t * _jpg_buf;
     char * part_buf[64];
-    char log_buf[255];
+    uint8_t resized_img[NNABLART_VALIDATION_INPUT0_SIZE];
 
     static int64_t last_frame = 0;
     if(!last_frame) {
@@ -167,6 +161,8 @@ esp_err_t jpg_stream_httpd_handler(httpd_req_t *req){
     if(res != ESP_OK){
         return res;
     }
+
+    float *nn_input_buffer = nnablart_validation_input_buffer(_context, 0);
 
     while(true){
         camera_fb_t *fb = esp_camera_fb_get();
@@ -201,36 +197,47 @@ esp_err_t jpg_stream_httpd_handler(httpd_req_t *req){
             free(_jpg_buf);
         }
 
-        // Preprocessing
-        stbir_resize_uint8(fb->buf, 160, 120, 0, resized_img, INPUT_WIDTH, INPUT_HEIGHT, 0, 1);
+        // リサイズ
+        stbir_resize_uint8(fb->buf, 160, 120, 0, resized_img, 28, 28, 0, 1);
         esp_camera_fb_return(fb);
 
-        float *nn_input_buffer = nnablart_validation_input_buffer(_context, 0);
+        // 白黒反転, 閾値処理
         for (int i = 0; i < NNABLART_VALIDATION_INPUT0_SIZE; i++) {
-            nn_input_buffer[i] = abs(resized_img[i] - 255) / 255.0f;
+            uint8_t p = ~(resized_img[i]);
+    
+            if (p < 180) {
+                p = 0;
+            }
+
+            nn_input_buffer[i] = p;
         }
 
-        // Exec inference
+        // Infer image
+        int64_t infer_time = esp_timer_get_time();
         nnablart_validation_inference(_context);
         infer_time = (esp_timer_get_time() - infer_time) / 1000;
 
-        float *pred = nnablart_validation_output_buffer(_context, 0);
-        log_buf[0] = '\0';
-        for (int class = 0; class < NNABLART_VALIDATION_OUTPUT0_SIZE; class++) {
-            char str_class[20];
-            sprintf(str_class, "%d: %6.3f  ", class, pred[class]);
-            strcat(log_buf, str_class);
-        }
+        // Fetch inference result
+        float *probs = nnablart_validation_output_buffer(_context, 0);
 
-        ESP_LOGI(TAG, "%s", log_buf);
+        int top_class = 0;
+        float top_probability = 0.0f;
+        for (int class = 0; class < NNABLART_VALIDATION_OUTPUT0_SIZE; class++) {
+            if (top_probability < probs[class]) {
+                top_probability = probs[class];
+                top_class = class;
+            }
+        }
 
         int64_t fr_end = esp_timer_get_time();
         int64_t frame_time = fr_end - last_frame;
         last_frame = fr_end;
         frame_time /= 1000;
-        ESP_LOGI(TAG, "Frame-time %ums (%.1ffps)  Inferrence-time  %ums", (uint32_t)frame_time, 1000.0 / (uint32_t)frame_time, (uint32_t)infer_time);
+        ESP_LOGI(TAG, "Result %d   Frame-time %ums (Inferrence-time %ums)",
+            top_class, (uint32_t)frame_time, (uint32_t)infer_time);
     }
 
+    nnablart_validation_free_context(_context);
     last_frame = 0;
     return res;
 }
