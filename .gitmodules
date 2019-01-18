@@ -1,0 +1,3 @@
+[submodule "components/dnn/nnabla-c-runtime"]
+	path = components/dnn/nnabla-c-runtime
+	url = https://github.com/sony/nnabla-c-runtime.git
